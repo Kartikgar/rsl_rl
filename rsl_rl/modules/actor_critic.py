@@ -34,7 +34,71 @@ import torch
 import torch.nn as nn
 from torch.distributions import Normal
 from torch.nn.modules import rnn
+from .vision_encoder import Encoder
+from torch.nn.functional import normalize
+import matplotlib.pyplot as plt
+class Actor(nn.Module):
+    def __init__(self, num_actor_obs, num_actions, actor_hidden_dims = [256 , 256, 256],activation='elu',                       init_noise_std=1.0,
+                        **kwargs):
+        if kwargs:
+            print("ActorCritic.__init__ got unexpected arguments, which will be ignored: " + str([key for key in kwargs.keys()]))
+        super(Actor, self).__init__()
+    #use for front cam only
+        activation = get_activation(activation)
+        img_out_dims=64
+        mlp_input_dim_a = 48
+        self.mlp0 = nn.Linear(mlp_input_dim_a, actor_hidden_dims[0] -img_out_dims)
+        self.activ0 = nn.ELU()
+        self.mlp1 = nn.Linear(actor_hidden_dims[0] ,actor_hidden_dims[1])
+        self.activ1 = nn.ELU()
+        self.mlp2 = nn.Linear(actor_hidden_dims[1],actor_hidden_dims[2])
+        self.activ2 = nn.ELU()
+        self.mlp3 = nn.Linear(actor_hidden_dims[2], num_actions)
+        self.feature_extraction = Encoder(channels=1,outDims=img_out_dims)
 
+    def forward(self,x):
+        prop = self.mlp0(x[:,:48])
+        prop = self.activ0(prop)
+        prop = normalize(prop)
+        img = self.feature_extraction.forward(x[:,48:].reshape((x.size(0),1,32,32)))
+        print (x[:,48:].reshape((x.size(0),1,32,32)).shape)
+        out = torch.hstack((prop,img))
+        out = self.mlp1(out)
+        out = self.activ1(out)
+        out = self.mlp2(out)
+        out = self.activ2(out)
+        out = self.mlp3(out)
+        # print (" i am being used :)")
+        return out
+
+    # Use for front and bottom
+    #     activation = get_activation(activation)
+    #     img_out_dims=64
+    #     mlp_input_dim_a = 48
+    #     self.mlp0 = nn.Linear(mlp_input_dim_a, actor_hidden_dims[0] -img_out_dims*2)
+    #     self.activ0 = nn.ELU()
+    #     self.mlp1 = nn.Linear(actor_hidden_dims[0] ,actor_hidden_dims[1])
+    #     self.activ1 = nn.ELU()
+    #     self.mlp2 = nn.Linear(actor_hidden_dims[1],actor_hidden_dims[2])
+    #     self.activ2 = nn.ELU()
+    #     self.mlp3 = nn.Linear(actor_hidden_dims[2], num_actions)
+    #     self.feature_extraction_f = Encoder(channels=1,outDims=img_out_dims)
+    #     self.feature_extraction_b = Encoder(channels=1,outDims=img_out_dims)
+
+    # def forward(self,x):
+    #     prop = self.mlp0(x[:,:48])
+    #     prop = self.activ0(prop)
+    #     prop = normalize(prop)
+    #     img_f = self.feature_extraction_f.forward(x[:,48:48+32*32].reshape((x.size(0),1,32,32)))
+    #     img_b = self.feature_extraction_b.forward(x[:,48+32*32:].reshape((x.size(0),1,32,32)))
+    #     out = torch.hstack((prop,img_f,img_b))
+    #     out = self.mlp1(out)
+    #     out = self.activ1(out)
+    #     out = self.mlp2(out)
+    #     out = self.activ2(out)
+    #     out = self.mlp3(out)
+    #     # print (" i am being used :)")
+    #     return out
 class ActorCritic(nn.Module):
     is_recurrent = False
     def __init__(self,  num_actor_obs,
@@ -65,7 +129,10 @@ class ActorCritic(nn.Module):
                 actor_layers.append(nn.Linear(actor_hidden_dims[l], actor_hidden_dims[l + 1]))
                 actor_layers.append(activation)
         self.actor = nn.Sequential(*actor_layers)
-
+        # self.actor = Actor(num_actor_obs = num_actor_obs , 
+        #                     num_actions = num_actions, 
+        #                     actor_hidden_dims = actor_hidden_dims, 
+        #                     activation=activation)
         # Value function
         critic_layers = []
         critic_layers.append(nn.Linear(mlp_input_dim_c, critic_hidden_dims[0]))
@@ -78,8 +145,8 @@ class ActorCritic(nn.Module):
                 critic_layers.append(activation)
         self.critic = nn.Sequential(*critic_layers)
 
-        print(f"Actor MLP: {self.actor}")
-        print(f"Critic MLP: {self.critic}")
+        # print(f"Actor MLP: {self.actor}")
+        # print(f"Critic MLP: {self.critic}")
 
         # Action noise
         self.std = nn.Parameter(init_noise_std * torch.ones(num_actions))
@@ -117,10 +184,11 @@ class ActorCritic(nn.Module):
         return self.distribution.entropy().sum(dim=-1)
 
     def update_distribution(self, observations):
-        mean = self.actor(observations)
+        mean = self.actor.forward(observations)
         self.distribution = Normal(mean, mean*0. + self.std)
 
     def act(self, observations, **kwargs):
+        # print ("obs:",observations.shape)
         self.update_distribution(observations)
         return self.distribution.sample()
     
@@ -128,7 +196,7 @@ class ActorCritic(nn.Module):
         return self.distribution.log_prob(actions).sum(dim=-1)
 
     def act_inference(self, observations):
-        actions_mean = self.actor(observations)
+        actions_mean = self.actor.forward(observations)
         return actions_mean
 
     def evaluate(self, critic_observations, **kwargs):
@@ -153,3 +221,13 @@ def get_activation(act_name):
     else:
         print("invalid activation function!")
         return None
+
+if __name__ == '__main__':
+    model = Actor(num_actor_obs = 48 , 
+                            num_actions = 10, 
+                            actor_hidden_dims = [256,256,256], 
+                            activation='elu')
+    print (model)
+    input = torch.randn(10,1072)
+    out = model(input)
+    import pdb;pdb.set_trace()
